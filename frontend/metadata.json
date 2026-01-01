@@ -1,0 +1,7 @@
+{
+  "name": "EduTrack QR Attendance",
+  "description": "A seamless attendance management system using QR codes for students and teachers.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

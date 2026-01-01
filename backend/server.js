@@ -55,22 +55,27 @@ app.post('/api/config', async (req, res) => {
 // Auth Endpoints
 app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
-  
-  if (role !== 'ADMIN') {
-    const config = await Config.findOne({ key: 'system_settings' });
-    if (config?.value?.isLoginLocked) {
-      return res.status(403).json({ error: 'System is currently locked by Administrator.' });
-    }
-  }
-
-  if (role === 'ADMIN' && identifier === 'admin' && password === 'admin123') {
-    return res.json({ success: true, name: 'Root Admin', role: 'ADMIN' });
-  }
 
   try {
+    if (role !== 'ADMIN') {
+      const config = await Config.findOne({ key: 'system_settings' });
+      if (config?.value?.isLoginLocked) {
+        return res.status(403).json({ error: 'System is currently locked by Administrator.' });
+      }
+    }
+
     const user = await User.findOne({ role, identifier, password });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    res.json({ success: true, name: user.name, role: user.role });
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    res.json({
+      success: true,
+      name: user.name,
+      role: user.role
+    });
+
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error during login' });

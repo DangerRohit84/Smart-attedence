@@ -12,7 +12,7 @@ app.use(express.json());
 // --- Database Connection ---
 const connectDB = async () => {
   try {
-    const uri = process.env.MONGODB_URI;
+    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/edutrack';
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
     console.log('✅ MongoDB Connected and Synced');
@@ -56,7 +56,6 @@ app.post('/api/config', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
   
-  // Check if system is locked for non-admins
   if (role !== 'ADMIN') {
     const config = await Config.findOne({ key: 'system_settings' });
     if (config?.value?.isLoginLocked) {
@@ -73,17 +72,30 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     res.json({ success: true, name: user.name, role: user.role });
   } catch (err) {
+    console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error during login' });
   }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
+    const { identifier, name, password, role } = req.body;
+    
+    // Manual check for required fields to provide better error messages
+    if (!identifier || !name || !password || !role) {
+      return res.status(400).json({ error: 'Missing required fields: ID, Name, Password, and Role are required.' });
+    }
+
     const user = new User(req.body);
     await user.save();
     res.status(201).json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: 'Registration failed or ID already exists' });
+    console.error('Registration error details:', err);
+    if (err.code === 11000) {
+      res.status(400).json({ error: `The ID "${req.body.identifier}" is already registered.` });
+    } else {
+      res.status(400).json({ error: err.message || 'Registration failed due to a validation error.' });
+    }
   }
 });
 
@@ -181,7 +193,7 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
 });

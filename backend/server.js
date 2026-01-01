@@ -12,7 +12,7 @@ app.use(express.json());
 // --- Database Connection ---
 const connectDB = async () => {
   try {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/edutrack';
+    const uri = process.env.MONGODB_URI;
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
     console.log('✅ MongoDB Connected and Synced');
@@ -193,7 +193,7 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
 });

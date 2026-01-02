@@ -2,7 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
-import User from './models/User.js';
+import Student from './models/Student.js';
+import Teacher from './models/Teacher.js';
 import Session from './models/Session.js';
 
 const app = express();
@@ -15,7 +16,7 @@ const connectDB = async () => {
     const uri = process.env.MONGODB_URI;
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
-    console.log('✅ MongoDB Connected and Synced');
+    console.log('✅ MongoDB Connected');
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
   }
@@ -34,22 +35,30 @@ const Config = mongoose.models.Config || mongoose.model('Config', ConfigSchema);
 
 // Global System Config
 app.get('/api/config', async (req, res) => {
-  let config = await Config.findOne({ key: 'system_settings' });
-  if (!config) {
-    config = new Config({ key: 'system_settings', value: { isLoginLocked: false, lastUpdated: new Date().toISOString() } });
-    await config.save();
+  try {
+    let config = await Config.findOne({ key: 'system_settings' });
+    if (!config) {
+      config = new Config({ key: 'system_settings', value: { isLoginLocked: false, lastUpdated: new Date().toISOString() } });
+      await config.save();
+    }
+    res.json(config.value);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch config' });
   }
-  res.json(config.value);
 });
 
 app.post('/api/config', async (req, res) => {
-  const updatedValue = { ...req.body, lastUpdated: new Date().toISOString() };
-  await Config.findOneAndUpdate(
-    { key: 'system_settings' },
-    { value: updatedValue },
-    { upsert: true }
-  );
-  res.json(updatedValue);
+  try {
+    const updatedValue = { ...req.body, lastUpdated: new Date().toISOString() };
+    await Config.findOneAndUpdate(
+      { key: 'system_settings' },
+      { value: updatedValue },
+      { upsert: true }
+    );
+    res.json(updatedValue);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update config' });
+  }
 });
 
 // Auth Endpoints
@@ -57,6 +66,9 @@ app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
 
   try {
+    let user = null;
+    
+    // Check lock first (fast exit)
     if (role !== 'ADMIN') {
       const config = await Config.findOne({ key: 'system_settings' });
       if (config?.value?.isLoginLocked) {
@@ -64,16 +76,27 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    const user = await User.findOne({ role, identifier, password });
+    if (role === 'STUDENT') {
+      user = await Student.findOne({ rollNumber: identifier.toUpperCase(), password });
+    } else if (role === 'TEACHER') {
+      user = await Teacher.findOne({ employeeId: identifier, password });
+    } else if (role === 'ADMIN') {
+       // Simple admin check (can be improved with a dedicated Admin model)
+       // For now, allow a hardcoded or specific check
+       if (identifier === 'admin' && password === 'admin') {
+         user = { name: 'Administrator', role: 'ADMIN', identifier: 'admin' };
+       }
+    }
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
     }
 
     res.json({
       success: true,
       name: user.name,
-      role: user.role
+      role: role,
+      identifier: identifier.toUpperCase()
     });
 
   } catch (err) {
@@ -84,62 +107,81 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { identifier, name, password, role } = req.body;
+    const { identifier, name, password, role, department, section, phone } = req.body;
     
-    // Manual check for required fields to provide better error messages
     if (!identifier || !name || !password || !role) {
-      return res.status(400).json({ error: 'Missing required fields: ID, Name, Password, and Role are required.' });
+      return res.status(400).json({ error: 'Missing required fields.' });
     }
 
-    const user = new User(req.body);
-    await user.save();
+    if (role === 'STUDENT') {
+      const existing = await Student.findOne({ rollNumber: identifier.toUpperCase() });
+      if (existing) return res.status(400).json({ error: 'Student already registered.' });
+      
+      const student = new Student({
+        rollNumber: identifier.toUpperCase(),
+        name,
+        password,
+        department,
+        section,
+        phone
+      });
+      await student.save();
+    } else if (role === 'TEACHER') {
+      const existing = await Teacher.findOne({ employeeId: identifier });
+      if (existing) return res.status(400).json({ error: 'Teacher already registered.' });
+      
+      const teacher = new Teacher({
+        employeeId: identifier,
+        name,
+        password,
+        department
+      });
+      await teacher.save();
+    }
+
     res.status(201).json({ success: true });
   } catch (err) {
-    console.error('Registration error details:', err);
-    if (err.code === 11000) {
-      res.status(400).json({ error: `The ID "${req.body.identifier}" is already registered.` });
-    } else {
-      res.status(400).json({ error: err.message || 'Registration failed due to a validation error.' });
-    }
+    console.error('❌ Registration error:', err);
+    res.status(400).json({ error: 'Registration failed.' });
   }
 });
 
 // Student Endpoints
 app.get('/api/students', async (req, res) => {
-  const students = await User.find({ role: 'STUDENT' });
+  const students = await Student.find();
   res.json(students);
 });
 
 app.get('/api/students/:id', async (req, res) => {
-  const student = await User.findOne({ identifier: req.params.id, role: 'STUDENT' });
+  const student = await Student.findOne({ rollNumber: req.params.id.toUpperCase() });
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(student);
 });
 
 app.post('/api/students/:id/reset-device', async (req, res) => {
-  await User.updateOne({ identifier: req.params.id }, { $unset: { deviceId: 1 } });
+  await Student.updateOne({ rollNumber: req.params.id.toUpperCase() }, { $unset: { deviceId: 1 } });
   res.json({ success: true });
 });
 
 app.delete('/api/students/:id', async (req, res) => {
-  await User.deleteOne({ identifier: req.params.id });
+  await Student.deleteOne({ rollNumber: req.params.id.toUpperCase() });
   res.json({ success: true });
 });
 
 // Teacher Endpoints
 app.get('/api/teachers', async (req, res) => {
-  const teachers = await User.find({ role: 'TEACHER' });
+  const teachers = await Teacher.find();
   res.json(teachers);
 });
 
 app.get('/api/teachers/:id', async (req, res) => {
-  const teacher = await User.findOne({ identifier: req.params.id, role: 'TEACHER' });
+  const teacher = await Teacher.findOne({ employeeId: req.params.id });
   if (!teacher) return res.status(404).json({ error: 'Teacher not found' });
   res.json(teacher);
 });
 
 app.delete('/api/teachers/:id', async (req, res) => {
-  await User.deleteOne({ identifier: req.params.id, role: 'TEACHER' });
+  await Teacher.deleteOne({ employeeId: req.params.id });
   res.json({ success: true });
 });
 
@@ -163,24 +205,29 @@ app.put('/api/sessions/:id', async (req, res) => {
 // Attendance Marking Logic
 app.post('/api/sessions/:id/mark', async (req, res) => {
   const { id } = req.params;
-  const { rollNumber, deviceId, name, department, section } = req.body;
+  const { rollNumber, deviceId, name } = req.body;
 
   try {
     const session = await Session.findOne({ id, isActive: true });
     if (!session) return res.status(404).json({ error: 'Session not active' });
 
-    if (session.attendance.some(r => r.rollNumber === rollNumber)) {
+    const normalizedRoll = rollNumber.toUpperCase();
+
+    if (session.attendance.some(r => r.rollNumber === normalizedRoll)) {
       return res.status(400).json({ error: 'Attendance already marked' });
     }
 
-    const student = await User.findOne({ identifier: rollNumber, role: 'STUDENT' });
-    if (!student) return res.status(404).json({ error: 'Student not found' });
+    const student = await Student.findOne({ rollNumber: normalizedRoll });
+    if (!student) {
+      console.log('Student not found in Student collection:', normalizedRoll);
+      return res.status(404).json({ error: 'Student record not found in database.' });
+    }
 
     if (student.deviceId && student.deviceId !== deviceId) {
       return res.status(403).json({ error: 'Device mismatch. Identity locked to another device.' });
     }
 
-    const otherStudent = await User.findOne({ deviceId, identifier: { $ne: rollNumber } });
+    const otherStudent = await Student.findOne({ deviceId, rollNumber: { $ne: normalizedRoll } });
     if (otherStudent) {
       return res.status(403).json({ error: `Device proxy detected. Already used by ${otherStudent.name}` });
     }
@@ -190,10 +237,11 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
       await student.save();
     }
 
-    session.attendance.push({ rollNumber, name, deviceId, timestamp: new Date() });
+    session.attendance.push({ rollNumber: normalizedRoll, name, deviceId, timestamp: new Date() });
     await session.save();
     res.json({ success: true });
   } catch (err) {
+    console.error('Mark Attendance Error:', err);
     res.status(500).json({ error: 'Failed to mark attendance' });
   }
 });

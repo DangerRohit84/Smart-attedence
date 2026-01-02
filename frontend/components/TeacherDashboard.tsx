@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { AttendanceSession, AuthState, TeacherProfile, SystemConfig } from '../types';
 import { storageService } from '../services/storageService';
@@ -27,7 +28,6 @@ const TeacherDashboard: React.FC<Props> = ({ auth }) => {
   useEffect(() => {
     const refreshInterval = setInterval(async () => {
       if (activeSession) await syncActiveSession();
-      // Periodically poll for config changes
       const config = await storageService.getSystemConfig();
       setSysConfig(config);
     }, 2000);
@@ -102,14 +102,21 @@ const TeacherDashboard: React.FC<Props> = ({ auth }) => {
   };
 
   const exportCSV = (session: AttendanceSession) => {
-    const headers = ["Roll Number", "Name", "Department", "Section", "Time"];
-    const rows = session.attendance.map(r => [r.rollNumber, r.name, r.department, r.section, new Date(r.timestamp).toLocaleTimeString()]);
+    const headers = ["Roll Number", "Name", "Department", "Section", "Time", "Mobile Physical ID"];
+    const rows = session.attendance.map(r => [
+      r.rollNumber, 
+      r.name, 
+      r.department || "N/A", 
+      r.section || "N/A", 
+      new Date(r.timestamp).toLocaleTimeString(),
+      r.deviceId || "N/A"
+    ]);
     const csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `Attendance_${session.courseName}.csv`;
+    link.download = `Attendance_${session.courseName.replace(/\s+/g, '_')}_${new Date(session.startTime).toLocaleDateString()}.csv`;
     link.click();
   };
 

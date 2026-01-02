@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -81,8 +82,6 @@ app.post('/api/auth/login', async (req, res) => {
     } else if (role === 'TEACHER') {
       user = await Teacher.findOne({ employeeId: identifier, password });
     } else if (role === 'ADMIN') {
-       // Simple admin check (can be improved with a dedicated Admin model)
-       // For now, allow a hardcoded or specific check
        if (identifier === 'admin' && password === 'admin') {
          user = { name: 'Administrator', role: 'ADMIN', identifier: 'admin' };
        }
@@ -205,7 +204,7 @@ app.put('/api/sessions/:id', async (req, res) => {
 // Attendance Marking Logic
 app.post('/api/sessions/:id/mark', async (req, res) => {
   const { id } = req.params;
-  const { rollNumber, deviceId, name } = req.body;
+  const { rollNumber, deviceId, name, department, section } = req.body;
 
   try {
     const session = await Session.findOne({ id, isActive: true });
@@ -219,7 +218,6 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
 
     const student = await Student.findOne({ rollNumber: normalizedRoll });
     if (!student) {
-      console.log('Student not found in Student collection:', normalizedRoll);
       return res.status(404).json({ error: 'Student record not found in database.' });
     }
 
@@ -237,7 +235,14 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
       await student.save();
     }
 
-    session.attendance.push({ rollNumber: normalizedRoll, name, deviceId, timestamp: new Date() });
+    session.attendance.push({ 
+      rollNumber: normalizedRoll, 
+      name, 
+      department: department || student.department,
+      section: section || student.section,
+      deviceId, 
+      timestamp: new Date() 
+    });
     await session.save();
     res.json({ success: true });
   } catch (err) {

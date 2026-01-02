@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 const AttendanceRecordSchema = new mongoose.Schema({
   rollNumber: String,
   name: String,
+  department: String,
+  section: String,
   timestamp: { type: Date, default: Date.now },
   deviceId: String
 });

@@ -45,10 +45,12 @@ const App: React.FC = () => {
       <div className="min-h-screen flex flex-col items-center justify-center p-6 pb-20">
         <div className="max-w-4xl w-full text-center space-y-12">
           <div className="space-y-4 animate-in fade-in duration-1000">
-            <div className="inline-block p-4 bg-blue-600 rounded-[2rem] shadow-2xl mb-2">
-              <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-              </svg>
+            <div className="inline-block p-4 rounded-[2rem] shadow-2xl mb-2 bg-gradient-to-br from-[#1e1b4b] via-[#312e81] to-[#020617]">
+              <img 
+                src="./Presence.png" 
+                alt="App Icon"
+                className="w-16 h-16 object-contain"
+              />
             </div>
             <h1 className="text-6xl font-black text-slate-900 tracking-tighter">EduTrack <span className="text-blue-600">Pro</span></h1>
             <p className="text-slate-500 text-xl font-medium tracking-wide">Next-Gen Campus Intelligence</p>
@@ -95,7 +97,13 @@ const App: React.FC = () => {
       <nav className="glass-card sticky top-0 z-40 border-b border-slate-100">
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-black">E</div>
+            <div className="w-15 h-15 inline-block p-4 rounded-[2rem] shadow-2xl mb-2 bg-gradient-to-br from-[#1e1b4b] via-[#312e81] to-[#020617]">
+              <img 
+                src="./Presence.png" 
+                alt="App Icon"
+                className="w-16 h-16 object-contain"
+              />
+            </div>
             <div>
               <span className="font-black text-xl text-slate-900 tracking-tighter">EduTrack</span>
               <span className="text-xs font-bold text-blue-600 block leading-none uppercase tracking-widest">{auth.role} DASHBOARD</span>

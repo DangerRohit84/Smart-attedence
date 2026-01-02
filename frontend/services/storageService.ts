@@ -1,6 +1,7 @@
+
 import { StudentProfile, TeacherProfile, AttendanceSession, SystemConfig, UserRole } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL;
+const API_BASE =  import.meta.env.VITE_API_BASE_URL;
 
 export const storageService = {
   // Device Fingerprinting
@@ -24,11 +25,12 @@ export const storageService = {
   },
 
   register: async (role: string, data: any) => {
-    // Ensure we don't overwrite identifier with undefined if it already exists in data
+    // Ensure rollNumber is always used for students for consistency
+    const finalIdentifier = data.identifier || data.rollNumber || data.employeeId;
     const payload = {
       ...data,
       role,
-      identifier: data.identifier || data.rollNumber || data.employeeId
+      identifier: finalIdentifier
     };
     
     const res = await fetch(`${API_BASE}/auth/register`, {

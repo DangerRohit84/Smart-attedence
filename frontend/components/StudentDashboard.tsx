@@ -30,7 +30,7 @@ const StudentDashboard: React.FC<Props> = ({ auth }) => {
   const studentHistory = useMemo(() => {
     if (!profile) return [];
     return sessions
-      .filter(session => session.attendance.some(record => record.rollNumber === profile.rollNumber))
+      .filter(session => session.attendance.some(record => record.rollNumber.toUpperCase() === profile.rollNumber.toUpperCase()))
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
   }, [sessions, profile]);
 
@@ -43,7 +43,7 @@ const StudentDashboard: React.FC<Props> = ({ auth }) => {
 
     try {
       const result = await storageService.markAttendance(sessionId, {
-        rollNumber: profile.rollNumber,
+        rollNumber: profile.rollNumber.toUpperCase(),
         name: profile.name,
         department: profile.department,
         section: profile.section,
@@ -51,14 +51,14 @@ const StudentDashboard: React.FC<Props> = ({ auth }) => {
       });
 
       if (result.success) {
-        setLastMarked({ success: true, message: "Attendance recorded successfully." });
+        setLastMarked({ success: true, message: "Attendance recorded successfully!" });
         const updatedSessions = await storageService.getSessions();
         setSessions(updatedSessions);
       } else {
         setError(result.error);
       }
     } catch (err) {
-      setError("An error occurred while marking attendance.");
+      setError("Communication failure. Try again.");
     } finally {
       setIsScanning(false);
     }
@@ -72,44 +72,58 @@ const StudentDashboard: React.FC<Props> = ({ auth }) => {
   );
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-24">
+    <div className="max-w-4xl mx-auto space-y-8 pb-24 animate-in fade-in duration-500">
       <header className="glass-card p-10 rounded-[2.5rem] shadow-2xl border border-white flex flex-col md:flex-row items-center gap-8">
-        <div className="w-28 h-28 bg-gradient-to-tr from-blue-600 to-indigo-700 text-white flex items-center justify-center rounded-[2rem] font-black text-5xl">
+        <div className="w-28 h-28 bg-gradient-to-tr from-blue-600 to-indigo-700 text-white flex items-center justify-center rounded-[2rem] font-black text-5xl shadow-xl shadow-blue-200">
           {profile.name[0]}
         </div>
         <div className="flex-1 text-center md:text-left">
-          <h2 className="text-4xl font-black text-slate-900 mb-2">{profile.name}</h2>
-          <div className="flex justify-center md:justify-start gap-3">
-             <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black uppercase rounded-full">{profile.rollNumber}</span>
-             <span className="text-slate-400 font-bold text-sm">{profile.department}</span>
+          <h2 className="text-4xl font-black text-slate-900 mb-2 tracking-tighter">{profile.name}</h2>
+          <div className="flex justify-center md:justify-start gap-3 items-center">
+             <span className="px-4 py-1.5 bg-slate-900 text-white text-[10px] font-black uppercase rounded-full tracking-widest">{profile.rollNumber}</span>
+             <span className="text-slate-400 font-bold text-sm tracking-wide">{profile.department} &bull; SEC {profile.section}</span>
           </div>
         </div>
       </header>
 
       {!isScanning ? (
-        <button onClick={() => setIsScanning(true)} className="w-full bg-slate-900 text-white rounded-[3rem] p-12 shadow-2xl transition-all hover:-translate-y-2">
-           <h3 className="text-4xl font-black">Scan to Check-in</h3>
+        <button onClick={() => setIsScanning(true)} className="w-full bg-slate-900 text-white rounded-[3rem] p-12 shadow-2xl transition-all hover:-translate-y-2 hover:bg-black active:scale-[0.98]">
+           <h3 className="text-4xl font-black tracking-tight mb-2">Check-in Now</h3>
+           <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Scan Session QR Code</p>
         </button>
       ) : (
         <div className="space-y-6">
           <QRScannerComponent onScan={handleScan} />
-          <button onClick={() => setIsScanning(false)} className="w-full bg-slate-100 p-5 rounded-[2rem] font-black">Cancel</button>
+          <button onClick={() => setIsScanning(false)} className="w-full bg-white border-2 border-slate-100 p-5 rounded-[2rem] font-black text-slate-400 hover:text-rose-500 transition-all">Cancel Scanning</button>
         </div>
       )}
 
-      {error && <div className="p-8 bg-rose-50 text-rose-700 rounded-[2.5rem] font-black">{error}</div>}
-      {lastMarked && <div className="p-8 bg-emerald-50 text-emerald-800 rounded-[2.5rem] font-black">{lastMarked.message}</div>}
+      {error && <div className="p-8 bg-rose-50 text-rose-700 border border-rose-100 rounded-[2.5rem] font-black text-center animate-in slide-in-from-top-2">{error}</div>}
+      {lastMarked && <div className="p-8 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-[2.5rem] font-black text-center animate-in slide-in-from-top-2">{lastMarked.message}</div>}
 
       <div className="glass-card p-8 rounded-[2.5rem] border border-white shadow-xl">
-        <h3 className="text-xl font-black mb-8">Recent Check-ins</h3>
+        <div className="flex items-center justify-between mb-8">
+           <h3 className="text-xl font-black">Attendance History</h3>
+           <span className="px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-black rounded-full">{studentHistory.length} Sessions</span>
+        </div>
         <div className="space-y-4">
-          {studentHistory.map(session => (
-            <div key={session.id} className="p-5 bg-white rounded-3xl border border-slate-50 flex justify-between">
-              <div>
-                <h4 className="font-extrabold">{session.courseName}</h4>
-                <p className="text-xs text-slate-400">{new Date(session.startTime).toLocaleDateString()}</p>
+          {studentHistory.length === 0 ? (
+            <div className="text-center py-12 text-slate-300 font-bold uppercase tracking-widest text-xs border-2 border-dashed border-slate-50 rounded-3xl">No records found</div>
+          ) : studentHistory.map(session => (
+            <div key={session.id} className="p-6 bg-slate-50/50 rounded-3xl border border-slate-50 flex items-center justify-between hover:bg-white hover:border-blue-100 transition-all group">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-white rounded-2xl shadow-sm border border-slate-100 flex items-center justify-center text-blue-600 font-black">
+                  {session.courseName[0]}
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-slate-800">{session.courseName}</h4>
+                  <p className="text-xs text-slate-400 font-bold">{new Date(session.startTime).toLocaleDateString()} &bull; {new Date(session.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                </div>
               </div>
-              <span className="text-emerald-600 font-black text-xs">PRESENT</span>
+              <div className="flex flex-col items-end">
+                <span className="text-emerald-600 font-black text-[10px] uppercase tracking-widest">RECORDED</span>
+                <span className="text-[10px] text-slate-300 font-bold">Present</span>
+              </div>
             </div>
           ))}
         </div>

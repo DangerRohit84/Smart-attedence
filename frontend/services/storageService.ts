@@ -1,6 +1,6 @@
 import { StudentProfile, TeacherProfile, AttendanceSession, SystemConfig, UserRole } from '../types';
 
-let API_BASE = import.meta.env.VITE_API_BASE_URL;
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
 export const storageService = {
   // Device Fingerprinting
@@ -24,10 +24,17 @@ export const storageService = {
   },
 
   register: async (role: string, data: any) => {
+    // Ensure we don't overwrite identifier with undefined if it already exists in data
+    const payload = {
+      ...data,
+      role,
+      identifier: data.identifier || data.rollNumber || data.employeeId
+    };
+    
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...data, role, identifier: data.rollNumber || data.employeeId })
+      body: JSON.stringify(payload)
     });
     return res.json();
   },
@@ -117,7 +124,7 @@ export const storageService = {
     return res.json();
   },
 
-  // Global Config (Now API-backed)
+  // Global Config
   getSystemConfig: async (): Promise<SystemConfig> => {
     const res = await fetch(`${API_BASE}/config`);
     if (!res.ok) return { isLoginLocked: false, lastUpdated: new Date().toISOString() };

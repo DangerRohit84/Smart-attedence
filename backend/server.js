@@ -15,7 +15,7 @@ const connectDB = async () => {
     const uri = process.env.MONGODB_URI;
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
-    console.log('✅ MongoDB Connected');
+    console.log('✅ MongoDB Connected and Synced');
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
   }
@@ -34,30 +34,22 @@ const Config = mongoose.models.Config || mongoose.model('Config', ConfigSchema);
 
 // Global System Config
 app.get('/api/config', async (req, res) => {
-  try {
-    let config = await Config.findOne({ key: 'system_settings' });
-    if (!config) {
-      config = new Config({ key: 'system_settings', value: { isLoginLocked: false, lastUpdated: new Date().toISOString() } });
-      await config.save();
-    }
-    res.json(config.value);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch config' });
+  let config = await Config.findOne({ key: 'system_settings' });
+  if (!config) {
+    config = new Config({ key: 'system_settings', value: { isLoginLocked: false, lastUpdated: new Date().toISOString() } });
+    await config.save();
   }
+  res.json(config.value);
 });
 
 app.post('/api/config', async (req, res) => {
-  try {
-    const updatedValue = { ...req.body, lastUpdated: new Date().toISOString() };
-    await Config.findOneAndUpdate(
-      { key: 'system_settings' },
-      { value: updatedValue },
-      { upsert: true }
-    );
-    res.json(updatedValue);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to update config' });
-  }
+  const updatedValue = { ...req.body, lastUpdated: new Date().toISOString() };
+  await Config.findOneAndUpdate(
+    { key: 'system_settings' },
+    { value: updatedValue },
+    { upsert: true }
+  );
+  res.json(updatedValue);
 });
 
 // Auth Endpoints
@@ -65,25 +57,17 @@ app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
 
   try {
-    // 1. Fetch user by credentials only first
-    const user = await User.findOne({ identifier, password });
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
-    }
-
-    // 2. Lock check for non-admins
-    if (user.role !== 'ADMIN') {
+    if (role !== 'ADMIN') {
       const config = await Config.findOne({ key: 'system_settings' });
       if (config?.value?.isLoginLocked) {
         return res.status(403).json({ error: 'System is currently locked by Administrator.' });
       }
     }
 
-    // 3. Verify requested role matches user role OR user is an Admin logging in via a portal
-    // This allows admins to login through the Faculty (TEACHER) portal selection.
-    if (user.role !== role && user.role !== 'ADMIN') {
-      return res.status(401).json({ error: `Access Denied. You are registered as a ${user.role}.` });
+    const user = await User.findOne({ role, identifier, password });
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     res.json({
@@ -102,22 +86,21 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { identifier, name, password, role } = req.body;
     
+    // Manual check for required fields to provide better error messages
     if (!identifier || !name || !password || !role) {
-      return res.status(400).json({ error: 'Missing required fields. Please provide ID, Name, Password, and Role.' });
-    }
-
-    const existing = await User.findOne({ identifier });
-    if (existing) {
-      return res.status(400).json({ error: `The ID "${identifier}" is already registered.` });
+      return res.status(400).json({ error: 'Missing required fields: ID, Name, Password, and Role are required.' });
     }
 
     const user = new User(req.body);
     await user.save();
-    console.log('✅ User registered:', identifier);
     res.status(201).json({ success: true });
   } catch (err) {
-    console.error('❌ Registration error:', err);
-    res.status(400).json({ error: err.message || 'Registration failed.' });
+    console.error('Registration error details:', err);
+    if (err.code === 11000) {
+      res.status(400).json({ error: `The ID "${req.body.identifier}" is already registered.` });
+    } else {
+      res.status(400).json({ error: err.message || 'Registration failed due to a validation error.' });
+    }
   }
 });
 

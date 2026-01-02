@@ -47,7 +47,7 @@ const App: React.FC = () => {
           <div className="space-y-4 animate-in fade-in duration-1000">
             <div className="inline-block p-4 rounded-[2rem] shadow-2xl mb-2 bg-gradient-to-br from-[#1e1b4b] via-[#312e81] to-[#020617]">
               <img 
-                src="Presence.png" 
+                src="https://github.com/DangerRohit84/Smart-attedence/blob/main/frontend/Presence.png?raw=true" 
                 alt="App Icon"
                 className="w-16 h-16 object-contain"
               />
@@ -99,7 +99,7 @@ const App: React.FC = () => {
           <div className="flex items-center gap-3">
             <div className="w-15 h-15 inline-block p-4 rounded-[2rem] shadow-2xl mb-2 bg-gradient-to-br from-[#1e1b4b] via-[#312e81] to-[#020617]">
               <img 
-                src="Presence.png" 
+                src="https://github.com/DangerRohit84/Smart-attedence/blob/main/frontend/Presence.png?raw=true" 
                 alt="App Icon"
                 className="w-16 h-16 object-contain"
               />

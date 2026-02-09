@@ -1,4 +1,3 @@
-
 import mongoose from 'mongoose';
 
 const TeacherSchema = new mongoose.Schema({
@@ -28,10 +27,8 @@ const TeacherSchema = new mongoose.Schema({
   }
 }, { 
   timestamps: true,
-  collection: 'teachers' // Explicitly set collection name
+  collection: 'teachers'
 });
-
-// Ensure indexes are created
 
 const Teacher = mongoose.models.Teacher || mongoose.model('Teacher', TeacherSchema);
 export default Teacher;

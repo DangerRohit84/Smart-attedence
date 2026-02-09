@@ -22,25 +22,25 @@ const connectDB = async () => {
     console.log('✅ MongoDB Connected');
     
     // Seed default admin if none exists in the database
-    const adminExists = await User.findOne({ role: 'ADMIN' });
+    // We check specifically for the 'admin' identifier to prevent duplicates
+    const adminExists = await User.findOne({ identifier: 'admin' });
     if (!adminExists) {
       const defaultAdmin = new User({
         identifier: 'admin',
         name: 'System Administrator',
-        password: 'admin', // This is now the default password stored in the DB
+        password: 'admin', // Stored as plain text in this example, should be hashed in production
         role: 'ADMIN'
       });
       await defaultAdmin.save();
-      console.log('💎 Default Admin Account Created in Database (ID: admin / Pass: admin)');
+      console.log('💎 Seeding: Default Admin account created (admin / admin)');
     } else {
-      console.log('💎 Administrator account verified in database.');
+      console.log('💎 Database: Admin account already exists and is ready.');
     }
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
   }
 };
 
-// Start connection process
 connectDB();
 
 // --- Additional Config Schema ---
@@ -52,7 +52,6 @@ const Config = mongoose.models.Config || mongoose.model('Config', ConfigSchema);
 
 // --- API Endpoints ---
 
-// Global System Config
 app.get('/api/config', async (req, res) => {
   try {
     let config = await Config.findOne({ key: 'system_settings' });
@@ -82,32 +81,37 @@ app.post('/api/config', async (req, res) => {
 
 // Auth Endpoints
 app.post('/api/auth/login', async (req, res) => {
-  const { role, identifier, password } = req.body;
+  let { role, identifier, password } = req.body;
   
   if (!identifier || !password) {
     return res.status(400).json({ error: 'ID and Password are required.' });
   }
 
+  // Sanitize inputs
+  identifier = identifier.trim();
+  password = password.trim();
   const idLower = identifier.toLowerCase();
+
+  console.log(`[Auth] Login Attempt: ${idLower} as ${role}`);
 
   try {
     let user = null;
     
-    // Check system lock first (Admins/admin identifiers are exempt)
-    if (role !== 'ADMIN' && idLower !== 'admin') {
+    // Check system lock first (Admin identifier is exempt)
+    if (idLower !== 'admin' && role !== 'ADMIN') {
       const config = await Config.findOne({ key: 'system_settings' });
       if (config?.value?.isLoginLocked) {
         return res.status(403).json({ error: 'System is currently locked by Administrator.' });
       }
     }
 
-    // AUTHENTICATION LOGIC: Strictly query the database
+    // AUTHENTICATION: Strictly query database based on role or keyword
     if (idLower === 'admin' || role === 'ADMIN') {
-      // Look in the User collection for an Admin
+      // Admin always lives in the User collection
       user = await User.findOne({ 
         identifier: idLower, 
         role: 'ADMIN', 
-        password: password // Directly comparing stored password
+        password: password 
       });
     } else if (role === 'STUDENT') {
       user = await Student.findOne({ 
@@ -122,10 +126,12 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     if (!user) {
+      console.warn(`[Auth] Failed login for ${idLower}`);
       return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
     }
 
-    // Success response
+    console.log(`[Auth] Successful login for ${user.name} (${user.role || role})`);
+
     res.json({
       success: true,
       name: user.name,
@@ -135,51 +141,53 @@ app.post('/api/auth/login', async (req, res) => {
 
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Server error during authentication.' });
+    res.status(500).json({ error: 'Internal server error during authentication.' });
   }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { identifier, name, password, role, department, section, phone } = req.body;
-    const idLower = identifier.toLowerCase();
+    const idTrimmed = identifier?.trim();
+    const idLower = idTrimmed?.toLowerCase();
+    const passTrimmed = password?.trim();
     
-    if (!identifier || !name || !password || !role) {
+    if (!idTrimmed || !name || !passTrimmed || !role) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
 
     if (idLower === 'admin' || role === 'ADMIN') {
-      const existing = await User.findOne({ identifier: idLower, role: 'ADMIN' });
+      const existing = await User.findOne({ identifier: idLower });
       if (existing) return res.status(400).json({ error: 'Admin identifier already exists.' });
       
       const admin = new User({
         identifier: idLower,
-        name,
-        password,
+        name: name.trim(),
+        password: passTrimmed,
         role: 'ADMIN'
       });
       await admin.save();
     } else if (role === 'STUDENT') {
-      const existing = await Student.findOne({ rollNumber: identifier.toUpperCase() });
+      const existing = await Student.findOne({ rollNumber: idTrimmed.toUpperCase() });
       if (existing) return res.status(400).json({ error: 'Student already registered.' });
       
       const student = new Student({
-        rollNumber: identifier.toUpperCase(),
-        name,
-        password,
+        rollNumber: idTrimmed.toUpperCase(),
+        name: name.trim(),
+        password: passTrimmed,
         department,
         section,
         phone
       });
       await student.save();
     } else if (role === 'TEACHER') {
-      const existing = await Teacher.findOne({ employeeId: identifier });
+      const existing = await Teacher.findOne({ employeeId: idTrimmed });
       if (existing) return res.status(400).json({ error: 'Teacher already registered.' });
       
       const teacher = new Teacher({
-        employeeId: identifier,
-        name,
-        password,
+        employeeId: idTrimmed,
+        name: name.trim(),
+        password: passTrimmed,
         department
       });
       await teacher.save();
@@ -192,7 +200,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Bulk Import
 app.post('/api/students/bulk', async (req, res) => {
   try {
     const studentsData = req.body.students;
@@ -202,14 +209,14 @@ app.post('/api/students/bulk', async (req, res) => {
     let skippedCount = 0;
 
     for (const data of studentsData) {
-      const normalizedRoll = data.rollNumber.toUpperCase();
+      const normalizedRoll = data.rollNumber.trim().toUpperCase();
       const existing = await Student.findOne({ rollNumber: normalizedRoll });
       
       if (!existing) {
         const student = new Student({
           rollNumber: normalizedRoll,
-          name: data.name,
-          password: data.password,
+          name: data.name.trim(),
+          password: data.password.trim(),
           department: data.department,
           section: data.section,
           phone: data.phone
@@ -227,7 +234,6 @@ app.post('/api/students/bulk', async (req, res) => {
   }
 });
 
-// List Endpoints
 app.get('/api/students', async (req, res) => {
   const students = await Student.find();
   res.json(students);
@@ -281,7 +287,6 @@ app.put('/api/sessions/:id', async (req, res) => {
   res.json(session);
 });
 
-// Attendance Marking
 app.post('/api/sessions/:id/mark', async (req, res) => {
   const { id } = req.params;
   const { rollNumber, deviceId, name, department, section } = req.body;
@@ -290,7 +295,7 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
     const session = await Session.findOne({ id, isActive: true });
     if (!session) return res.status(404).json({ error: 'Session not active' });
 
-    const normalizedRoll = rollNumber.toUpperCase();
+    const normalizedRoll = rollNumber.trim().toUpperCase();
 
     if (session.attendance.some(r => r.rollNumber === normalizedRoll)) {
       return res.status(400).json({ error: 'Attendance already marked' });
@@ -313,7 +318,7 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
 
     session.attendance.push({ 
       rollNumber: normalizedRoll, 
-      name, 
+      name: name.trim(), 
       department: department || student.department,
       section: section || student.section,
       deviceId, 

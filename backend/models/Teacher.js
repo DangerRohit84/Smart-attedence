@@ -32,7 +32,6 @@ const TeacherSchema = new mongoose.Schema({
 });
 
 // Ensure indexes are created
-TeacherSchema.index({ identifier: 1 }, { unique: true });
 
 const Teacher = mongoose.models.Teacher || mongoose.model('Teacher', TeacherSchema);
 export default Teacher;

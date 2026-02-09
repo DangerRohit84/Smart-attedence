@@ -82,7 +82,8 @@ app.post('/api/auth/login', async (req, res) => {
     } else if (role === 'TEACHER') {
       user = await Teacher.findOne({ employeeId: identifier, password });
     } else if (role === 'ADMIN') {
-       if (identifier === 'admin' && password === 'admin') {
+       // Normalize identifier for admin check to be case-insensitive
+       if (identifier.toLowerCase() === 'admin' && password === 'admin') {
          user = { name: 'Administrator', role: 'ADMIN', identifier: 'admin' };
        }
     }

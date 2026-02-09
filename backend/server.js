@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import Student from './models/Student.js';
 import Teacher from './models/Teacher.js';
 import Session from './models/Session.js';
+import User from './models/User.js';
 
 const app = express();
 app.use(cors());
@@ -82,10 +83,13 @@ app.post('/api/auth/login', async (req, res) => {
     } else if (role === 'TEACHER') {
       user = await Teacher.findOne({ employeeId: identifier, password });
     } else if (role === 'ADMIN') {
-       // Normalize identifier for admin check to be case-insensitive
-       if (identifier.toLowerCase() === 'admin' && password === 'admin') {
-         user = { name: 'Administrator', role: 'ADMIN', identifier: 'admin' };
-       }
+       // Query the User collection for the Admin role
+       // This takes the password and identifier check directly to the database
+       user = await User.findOne({ 
+         identifier: identifier.toLowerCase(), 
+         role: 'ADMIN', 
+         password: password 
+       });
     }
 
     if (!user) {
@@ -137,6 +141,18 @@ app.post('/api/auth/register', async (req, res) => {
         department
       });
       await teacher.save();
+    } else if (role === 'ADMIN') {
+      // Allow registering an admin if needed, though usually seeded manually
+      const existing = await User.findOne({ identifier: identifier.toLowerCase(), role: 'ADMIN' });
+      if (existing) return res.status(400).json({ error: 'Admin already exists.' });
+      
+      const admin = new User({
+        identifier: identifier.toLowerCase(),
+        name,
+        password,
+        role: 'ADMIN'
+      });
+      await admin.save();
     }
 
     res.status(201).json({ success: true });

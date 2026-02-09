@@ -75,7 +75,6 @@ app.post('/api/auth/login', async (req, res) => {
       user = await Student.findOne({ rollNumber: idUpper, password: passTrimmed });
       finalRole = 'STUDENT';
     } else {
-      // For TEACHER portal, check both Teacher and Admin collections
       const adminUser = await Admin.findOne({ identifier: idUpper, password: passTrimmed });
       if (adminUser) {
         user = adminUser;
@@ -87,7 +86,7 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    if (!user) return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
+    if (!user) return res.status(401).json({ error: 'Invalid credentials. Please verify your ID and password.' });
 
     res.json({
       success: true,
@@ -97,7 +96,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error during login.' });
+    res.status(500).json({ error: 'Internal server error.' });
   }
 });
 
@@ -105,19 +104,19 @@ app.post('/api/auth/register', async (req, res) => {
   const { identifier, name, password, role, department, section, phone } = req.body;
   
   if (!identifier || !name || !password || !role) {
-    return res.status(400).json({ error: 'Please fill in all required fields.' });
+    return res.status(400).json({ error: 'All fields are required.' });
   }
 
   const idUpper = identifier.trim().toUpperCase();
   
   try {
     if (role === 'ADMIN') {
-      return res.status(403).json({ error: 'Administrator registration is restricted.' });
+      return res.status(403).json({ error: 'Admin signup is restricted.' });
     }
 
     if (role === 'STUDENT') {
       const existing = await Student.findOne({ rollNumber: idUpper });
-      if (existing) return res.status(400).json({ error: 'Roll number already exists in student records.' });
+      if (existing) return res.status(400).json({ error: 'This Roll Number is already registered.' });
       
       const newStudent = new Student({ 
         rollNumber: idUpper, 
@@ -129,12 +128,13 @@ app.post('/api/auth/register', async (req, res) => {
       });
       await newStudent.save();
     } else if (role === 'TEACHER') {
-      // Check if ID exists in Teacher OR Admin collections for consistency
-      const existingTeacher = await Teacher.findOne({ identifier: idUpper });
-      if (existingTeacher) return res.status(400).json({ error: 'Faculty ID already registered.' });
+      // Check both collections since they share the Faculty/Admin portal
+      const teacherExists = await Teacher.findOne({ identifier: idUpper });
+      const adminExists = await Admin.findOne({ identifier: idUpper });
       
-      const existingAdmin = await Admin.findOne({ identifier: idUpper });
-      if (existingAdmin) return res.status(400).json({ error: 'This ID is reserved for Administrator access.' });
+      if (teacherExists || adminExists) {
+        return res.status(400).json({ error: 'This Faculty ID is already registered in the system.' });
+      }
       
       const newTeacher = new Teacher({ 
         identifier: idUpper, 
@@ -143,19 +143,21 @@ app.post('/api/auth/register', async (req, res) => {
         department 
       });
       await newTeacher.save();
-    } else {
-      return res.status(400).json({ error: 'Invalid registration role.' });
     }
 
     res.status(201).json({ success: true, message: 'Registration successful.' });
   } catch (err) {
     console.error('Registration Error:', err);
-    const message = err.code === 11000 ? 'Identification ID already in use.' : (err.message || 'Registration failed.');
+    // 11000 is the MongoDB duplicate key error code
+    const isDuplicate = err.code === 11000;
+    const message = isDuplicate 
+      ? `The ID "${idUpper}" is already in use.` 
+      : (err.message || 'Registration failed. Please try again.');
     res.status(400).json({ error: message });
   }
 });
 
-// --- User Management ---
+// --- Management ---
 app.get('/api/students', async (req, res) => res.json(await Student.find().sort({ rollNumber: 1 })));
 app.get('/api/students/:id', async (req, res) => res.json(await Student.findOne({ rollNumber: req.params.id.toUpperCase() })));
 app.delete('/api/students/:id', async (req, res) => {
@@ -188,7 +190,7 @@ app.delete('/api/teachers/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// --- Sessions ---
+// --- Attendance Sessions ---
 app.get('/api/sessions', async (req, res) => res.json(await Session.find().sort({ createdAt: -1 })));
 app.post('/api/sessions', async (req, res) => res.status(201).json(await new Session(req.body).save()));
 app.put('/api/sessions/:id', async (req, res) => res.json(await Session.findOneAndUpdate({ id: req.params.id }, req.body, { new: true })));
@@ -198,13 +200,13 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   const { rollNumber, deviceId, name, department, section } = req.body;
   try {
     const session = await Session.findOne({ id, isActive: true });
-    if (!session) return res.status(404).json({ error: 'Attendance session is no longer active.' });
+    if (!session) return res.status(404).json({ error: 'Session is no longer active.' });
     const roll = rollNumber.trim().toUpperCase();
-    if (session.attendance.some(r => r.rollNumber === roll)) return res.status(400).json({ error: 'Attendance already marked for this session.' });
+    if (session.attendance.some(r => r.rollNumber === roll)) return res.status(400).json({ error: 'Attendance already recorded.' });
     const student = await Student.findOne({ rollNumber: roll });
-    if (!student) return res.status(404).json({ error: 'Student record not found.' });
-    if (student.deviceId && student.deviceId !== deviceId) return res.status(403).json({ error: 'Device conflict. This ID is locked to another device.' });
-    if (await Student.findOne({ deviceId, rollNumber: { $ne: roll } })) return res.status(403).json({ error: 'Security Alert: Device already in use by another student.' });
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    if (student.deviceId && student.deviceId !== deviceId) return res.status(403).json({ error: 'Identity locked to another device.' });
+    if (await Student.findOne({ deviceId, rollNumber: { $ne: roll } })) return res.status(403).json({ error: 'Device mismatch alert.' });
     if (!student.deviceId) { student.deviceId = deviceId; await student.save(); }
     session.attendance.push({ rollNumber: roll, name, department, section, deviceId, timestamp: new Date() });
     await session.save();
@@ -213,4 +215,4 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 API active on port ${PORT}`));

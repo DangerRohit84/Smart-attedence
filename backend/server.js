@@ -9,7 +9,7 @@ import Session from './models/Session.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Increased limit for bulk imports
 
 // --- Database Connection ---
 const connectDB = async () => {
@@ -145,6 +145,42 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+// Bulk Import
+app.post('/api/students/bulk', async (req, res) => {
+  try {
+    const studentsData = req.body.students;
+    if (!Array.isArray(studentsData)) return res.status(400).json({ error: 'Invalid data format' });
+
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    for (const data of studentsData) {
+      const normalizedRoll = data.rollNumber.toUpperCase();
+      const existing = await Student.findOne({ rollNumber: normalizedRoll });
+      
+      if (!existing) {
+        const student = new Student({
+          rollNumber: normalizedRoll,
+          name: data.name,
+          password: data.password,
+          department: data.department,
+          section: data.section,
+          phone: data.phone
+        });
+        await student.save();
+        addedCount++;
+      } else {
+        skippedCount++;
+      }
+    }
+
+    res.json({ success: true, added: addedCount, skipped: skippedCount });
+  } catch (err) {
+    console.error('Bulk import error:', err);
+    res.status(500).json({ error: 'Failed to process bulk import' });
+  }
+});
+
 // Student Endpoints
 app.get('/api/students', async (req, res) => {
   const students = await Student.find();
@@ -251,7 +287,7 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Server Running on Port ${PORT}`);
 });

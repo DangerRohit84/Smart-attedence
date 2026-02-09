@@ -10,20 +10,37 @@ import User from './models/User.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Increased limit for bulk imports
+app.use(express.json({ limit: '10mb' }));
 
-// --- Database Connection ---
+// --- Database Connection & Seeding ---
 const connectDB = async () => {
   try {
     const uri = process.env.MONGODB_URI;
     if (mongoose.connection.readyState >= 1) return;
+    
     await mongoose.connect(uri);
     console.log('✅ MongoDB Connected');
+    
+    // Seed default admin if none exists in the database
+    const adminExists = await User.findOne({ role: 'ADMIN' });
+    if (!adminExists) {
+      const defaultAdmin = new User({
+        identifier: 'admin',
+        name: 'System Administrator',
+        password: 'admin', // This is now the default password stored in the DB
+        role: 'ADMIN'
+      });
+      await defaultAdmin.save();
+      console.log('💎 Default Admin Account Created in Database (ID: admin / Pass: admin)');
+    } else {
+      console.log('💎 Administrator account verified in database.');
+    }
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
   }
 };
 
+// Start connection process
 connectDB();
 
 // --- Additional Config Schema ---
@@ -66,58 +83,83 @@ app.post('/api/config', async (req, res) => {
 // Auth Endpoints
 app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
+  
+  if (!identifier || !password) {
+    return res.status(400).json({ error: 'ID and Password are required.' });
+  }
+
+  const idLower = identifier.toLowerCase();
 
   try {
     let user = null;
     
-    // Check lock first (fast exit)
-    if (role !== 'ADMIN') {
+    // Check system lock first (Admins/admin identifiers are exempt)
+    if (role !== 'ADMIN' && idLower !== 'admin') {
       const config = await Config.findOne({ key: 'system_settings' });
       if (config?.value?.isLoginLocked) {
         return res.status(403).json({ error: 'System is currently locked by Administrator.' });
       }
     }
 
-    if (role === 'STUDENT') {
-      user = await Student.findOne({ rollNumber: identifier.toUpperCase(), password });
+    // AUTHENTICATION LOGIC: Strictly query the database
+    if (idLower === 'admin' || role === 'ADMIN') {
+      // Look in the User collection for an Admin
+      user = await User.findOne({ 
+        identifier: idLower, 
+        role: 'ADMIN', 
+        password: password // Directly comparing stored password
+      });
+    } else if (role === 'STUDENT') {
+      user = await Student.findOne({ 
+        rollNumber: identifier.toUpperCase(), 
+        password: password 
+      });
     } else if (role === 'TEACHER') {
-      user = await Teacher.findOne({ employeeId: identifier, password });
-    } else if (role === 'ADMIN') {
-       // Query the User collection for the Admin role
-       // This takes the password and identifier check directly to the database
-       user = await User.findOne({ 
-         identifier: identifier.toLowerCase(), 
-         role: 'ADMIN', 
-         password: password 
-       });
+      user = await Teacher.findOne({ 
+        employeeId: identifier, 
+        password: password 
+      });
     }
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
     }
 
+    // Success response
     res.json({
       success: true,
       name: user.name,
-      role: role,
+      role: user.role || role,
       identifier: identifier.toUpperCase()
     });
 
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error during login' });
+    res.status(500).json({ error: 'Server error during authentication.' });
   }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { identifier, name, password, role, department, section, phone } = req.body;
+    const idLower = identifier.toLowerCase();
     
     if (!identifier || !name || !password || !role) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
 
-    if (role === 'STUDENT') {
+    if (idLower === 'admin' || role === 'ADMIN') {
+      const existing = await User.findOne({ identifier: idLower, role: 'ADMIN' });
+      if (existing) return res.status(400).json({ error: 'Admin identifier already exists.' });
+      
+      const admin = new User({
+        identifier: idLower,
+        name,
+        password,
+        role: 'ADMIN'
+      });
+      await admin.save();
+    } else if (role === 'STUDENT') {
       const existing = await Student.findOne({ rollNumber: identifier.toUpperCase() });
       if (existing) return res.status(400).json({ error: 'Student already registered.' });
       
@@ -141,18 +183,6 @@ app.post('/api/auth/register', async (req, res) => {
         department
       });
       await teacher.save();
-    } else if (role === 'ADMIN') {
-      // Allow registering an admin if needed, though usually seeded manually
-      const existing = await User.findOne({ identifier: identifier.toLowerCase(), role: 'ADMIN' });
-      if (existing) return res.status(400).json({ error: 'Admin already exists.' });
-      
-      const admin = new User({
-        identifier: identifier.toLowerCase(),
-        name,
-        password,
-        role: 'ADMIN'
-      });
-      await admin.save();
     }
 
     res.status(201).json({ success: true });
@@ -193,12 +223,11 @@ app.post('/api/students/bulk', async (req, res) => {
 
     res.json({ success: true, added: addedCount, skipped: skippedCount });
   } catch (err) {
-    console.error('Bulk import error:', err);
     res.status(500).json({ error: 'Failed to process bulk import' });
   }
 });
 
-// Student Endpoints
+// List Endpoints
 app.get('/api/students', async (req, res) => {
   const students = await Student.find();
   res.json(students);
@@ -220,7 +249,6 @@ app.delete('/api/students/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// Teacher Endpoints
 app.get('/api/teachers', async (req, res) => {
   const teachers = await Teacher.find();
   res.json(teachers);
@@ -237,7 +265,6 @@ app.delete('/api/teachers/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// Session Endpoints
 app.get('/api/sessions', async (req, res) => {
   const sessions = await Session.find().sort({ createdAt: -1 });
   res.json(sessions);
@@ -254,7 +281,7 @@ app.put('/api/sessions/:id', async (req, res) => {
   res.json(session);
 });
 
-// Attendance Marking Logic
+// Attendance Marking
 app.post('/api/sessions/:id/mark', async (req, res) => {
   const { id } = req.params;
   const { rollNumber, deviceId, name, department, section } = req.body;
@@ -270,18 +297,14 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
     }
 
     const student = await Student.findOne({ rollNumber: normalizedRoll });
-    if (!student) {
-      return res.status(404).json({ error: 'Student record not found in database.' });
-    }
+    if (!student) return res.status(404).json({ error: 'Student record not found.' });
 
     if (student.deviceId && student.deviceId !== deviceId) {
       return res.status(403).json({ error: 'Device mismatch. Identity locked to another device.' });
     }
 
     const otherStudent = await Student.findOne({ deviceId, rollNumber: { $ne: normalizedRoll } });
-    if (otherStudent) {
-      return res.status(403).json({ error: `Device proxy detected. Already used by ${otherStudent.name}` });
-    }
+    if (otherStudent) return res.status(403).json({ error: `Device proxy detected. Already used by ${otherStudent.name}` });
 
     if (!student.deviceId) {
       student.deviceId = deviceId;
@@ -299,7 +322,6 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
     await session.save();
     res.json({ success: true });
   } catch (err) {
-    console.error('Mark Attendance Error:', err);
     res.status(500).json({ error: 'Failed to mark attendance' });
   }
 });

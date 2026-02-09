@@ -11,7 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// --- Database Connection ---
+// --- Database Connection (No Seeding as requested) ---
 const connectDB = async () => {
   try {
     const uri = process.env.MONGODB_URI;
@@ -34,6 +34,7 @@ const Config = mongoose.models.Config || mongoose.model('Config', ConfigSchema);
 
 // --- API Endpoints ---
 
+// System Config
 app.get('/api/config', async (req, res) => {
   try {
     let config = await Config.findOne({ key: 'system_settings' });
@@ -58,43 +59,40 @@ app.post('/api/config', async (req, res) => {
 });
 
 // --- Auth Endpoints ---
+
 app.post('/api/auth/login', async (req, res) => {
-  let { role, identifier, password } = req.body;
+  const { role, identifier, password } = req.body;
   
   if (!identifier || !password) {
     return res.status(400).json({ error: 'ID and Password are required.' });
   }
 
-  // FORCE IDENTIFIER TO UPPERCASE
+  // Force identifier to uppercase
   const idUpper = identifier.trim().toUpperCase();
   const passTrimmed = password.trim();
 
   try {
-    // Determine user collection and perform check
     let user = null;
     
     if (role === 'STUDENT') {
       user = await Student.findOne({ rollNumber: idUpper, password: passTrimmed });
     } else {
-      // Both TEACHER and ADMIN are stored in the User collection.
-      // We look for the user and check their role.
+      // For TEACHER/ADMIN portals, check the User collection
+      // The role in the portal is just a hint; we use the role stored in the DB
       user = await User.findOne({ identifier: idUpper, password: passTrimmed });
     }
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials. Please verify your ID and password.' });
+      return res.status(401).json({ error: 'Invalid credentials. Check your ID and password.' });
     }
 
-    // Role Enforcement Check
-    // If logging in as STUDENT, user must exist in Student collection (which they do if found).
-    // If logging via Faculty portal (TEACHER), we allow both TEACHER and ADMIN roles to pass.
     const finalRole = user.role || 'STUDENT';
 
-    // System Lock Check: Only ADMIN role is exempt from the login lock
+    // System Lock Check (Admins are always exempt)
     if (finalRole !== 'ADMIN') {
       const config = await Config.findOne({ key: 'system_settings' });
       if (config?.value?.isLoginLocked) {
-        return res.status(403).json({ error: 'System is currently locked by Administrator.' });
+        return res.status(403).json({ error: 'System is currently locked. Contact Administrator.' });
       }
     }
 
@@ -105,63 +103,69 @@ app.post('/api/auth/login', async (req, res) => {
       identifier: idUpper
     });
   } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error during login.' });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    let { identifier, name, password, role, department, section, phone } = req.body;
-    if (!identifier || !name || !password || !role) return res.status(400).json({ error: 'Missing fields' });
+    const { identifier, name, password, role, department, section, phone } = req.body;
+    if (!identifier || !name || !password || !role) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
 
     const idUpper = identifier.trim().toUpperCase();
     const passTrimmed = password.trim();
 
+    // Prevent public registration as ADMIN
+    if (role === 'ADMIN') {
+      return res.status(403).json({ error: 'Admin accounts cannot be created via signup.' });
+    }
+
     if (role === 'STUDENT') {
       const existing = await Student.findOne({ rollNumber: idUpper });
       if (existing) return res.status(400).json({ error: 'Student roll number already exists' });
-      const student = new Student({ rollNumber: idUpper, name: name.trim(), password: passTrimmed, department, section, phone });
+      
+      const student = new Student({
+        rollNumber: idUpper,
+        name: name.trim(),
+        password: passTrimmed,
+        department,
+        section,
+        phone
+      });
       await student.save();
-    } else {
+    } else if (role === 'TEACHER') {
       const existing = await User.findOne({ identifier: idUpper });
-      if (existing) return res.status(400).json({ error: 'Identifier already exists in faculty records' });
+      if (existing) return res.status(400).json({ error: 'Faculty ID already exists' });
       
-      // Enforce specific role if user provided it (TEACHER or ADMIN)
-      const userRole = (role === 'ADMIN' || role === 'TEACHER') ? role : 'TEACHER';
-      
-      const user = new User({ 
-        identifier: idUpper, 
-        name: name.trim(), 
-        password: passTrimmed, 
-        role: userRole, 
-        department 
+      const user = new User({
+        identifier: idUpper,
+        name: name.trim(),
+        password: passTrimmed,
+        role: 'TEACHER',
+        department
       });
       await user.save();
     }
 
     res.status(201).json({ success: true });
   } catch (err) {
-    console.error('Registration error:', err);
-    res.status(400).json({ error: 'Registration failed. Check if ID is already in use.' });
+    res.status(400).json({ error: 'Registration failed' });
   }
 });
 
-// --- Students ---
+// --- User Management (Admin Dashboard helpers) ---
+
 app.get('/api/students', async (req, res) => {
   const students = await Student.find();
   res.json(students);
 });
 
-app.get('/api/students/:id', async (req, res) => {
-  const student = await Student.findOne({ rollNumber: req.params.id.toUpperCase() });
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  res.json(student);
-});
-
-app.post('/api/students/:id/reset-device', async (req, res) => {
-  await Student.updateOne({ rollNumber: req.params.id.toUpperCase() }, { $unset: { deviceId: 1 } });
-  res.json({ success: true });
+app.get('/api/teachers', async (req, res) => {
+  // Only return users with role TEACHER (Admins managed separately or filtered)
+  const teachers = await User.find({ role: 'TEACHER' });
+  res.json(teachers);
 });
 
 app.delete('/api/students/:id', async (req, res) => {
@@ -169,41 +173,13 @@ app.delete('/api/students/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/students/bulk', async (req, res) => {
-  try {
-    const studentsData = req.body.students;
-    let added = 0, skipped = 0;
-    for (const data of studentsData) {
-      const idUpper = data.rollNumber.trim().toUpperCase();
-      const existing = await Student.findOne({ rollNumber: idUpper });
-      if (!existing) {
-        await new Student({ ...data, rollNumber: idUpper, password: data.password.trim() }).save();
-        added++;
-      } else skipped++;
-    }
-    res.json({ success: true, added, skipped });
-  } catch (err) { res.status(500).json({ error: 'Bulk import failed' }); }
-});
-
-// --- Faculty Management ---
-app.get('/api/teachers', async (req, res) => {
-  // Returns all users with role TEACHER
-  const teachers = await User.find({ role: 'TEACHER' });
-  res.json(teachers);
-});
-
-app.get('/api/teachers/:id', async (req, res) => {
-  const teacher = await User.findOne({ identifier: req.params.id.toUpperCase(), role: 'TEACHER' });
-  if (!teacher) return res.status(404).json({ error: 'Faculty member not found' });
-  res.json(teacher);
-});
-
 app.delete('/api/teachers/:id', async (req, res) => {
   await User.deleteOne({ identifier: req.params.id.toUpperCase(), role: 'TEACHER' });
   res.json({ success: true });
 });
 
-// --- Sessions ---
+// --- Sessions & Attendance ---
+// (Existing session logic remains compatible as it uses idUpper)
 app.get('/api/sessions', async (req, res) => {
   const sessions = await Session.find().sort({ createdAt: -1 });
   res.json(sessions);
@@ -225,19 +201,41 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   const { rollNumber, deviceId, name, department, section } = req.body;
   try {
     const session = await Session.findOne({ id, isActive: true });
-    if (!session) return res.status(404).json({ error: 'Session is no longer active' });
+    if (!session) return res.status(404).json({ error: 'Session not active' });
     const idUpper = rollNumber.trim().toUpperCase();
-    if (session.attendance.some(r => r.rollNumber === idUpper)) return res.status(400).json({ error: 'Attendance already recorded for this session' });
+    
+    if (session.attendance.some(r => r.rollNumber === idUpper)) {
+      return res.status(400).json({ error: 'Already marked' });
+    }
+
     const student = await Student.findOne({ rollNumber: idUpper });
-    if (!student) return res.status(404).json({ error: 'Student record not found in system' });
-    if (student.deviceId && student.deviceId !== deviceId) return res.status(403).json({ error: 'Identity locked to another device. Contact Admin.' });
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    
+    if (student.deviceId && student.deviceId !== deviceId) {
+      return res.status(403).json({ error: 'Identity locked to another device.' });
+    }
+
     const other = await Student.findOne({ deviceId, rollNumber: { $ne: idUpper } });
-    if (other) return res.status(403).json({ error: `This device is already used by student: ${other.name}` });
-    if (!student.deviceId) { student.deviceId = deviceId; await student.save(); }
-    session.attendance.push({ rollNumber: idUpper, name: name.trim(), department: department || student.department, section: section || student.section, deviceId, timestamp: new Date() });
+    if (other) return res.status(403).json({ error: `Device used by ${other.name}` });
+
+    if (!student.deviceId) {
+      student.deviceId = deviceId;
+      await student.save();
+    }
+
+    session.attendance.push({ 
+      rollNumber: idUpper, 
+      name: name.trim(), 
+      department: department || student.department, 
+      section: section || student.section, 
+      deviceId, 
+      timestamp: new Date() 
+    });
     await session.save();
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to record attendance' }); }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark' });
+  }
 });
 
 const PORT = process.env.PORT || 3001;

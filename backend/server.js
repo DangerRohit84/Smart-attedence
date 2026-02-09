@@ -4,17 +4,17 @@ import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import Student from './models/Student.js';
+import Teacher from './models/Teacher.js';
 import Session from './models/Session.js';
-import User from './models/User.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb' })); // Increased limit for bulk imports
 
-// --- Database Connection (No Seeding as requested) ---
+// --- Database Connection ---
 const connectDB = async () => {
   try {
-    const uri = process.env.MONGODB_URI;
+    const uri = process.env.MONGODB_URI ;
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
     console.log('✅ MongoDB Connected');
@@ -25,7 +25,7 @@ const connectDB = async () => {
 
 connectDB();
 
-// --- System Config Schema ---
+// --- Additional Config Schema ---
 const ConfigSchema = new mongoose.Schema({
   key: { type: String, required: true, unique: true },
   value: mongoose.Schema.Types.Mixed
@@ -34,7 +34,7 @@ const Config = mongoose.models.Config || mongoose.model('Config', ConfigSchema);
 
 // --- API Endpoints ---
 
-// System Config
+// Global System Config
 app.get('/api/config', async (req, res) => {
   try {
     let config = await Config.findOne({ key: 'system_settings' });
@@ -51,121 +51,151 @@ app.get('/api/config', async (req, res) => {
 app.post('/api/config', async (req, res) => {
   try {
     const updatedValue = { ...req.body, lastUpdated: new Date().toISOString() };
-    await Config.findOneAndUpdate({ key: 'system_settings' }, { value: updatedValue }, { upsert: true });
+    await Config.findOneAndUpdate(
+      { key: 'system_settings' },
+      { value: updatedValue },
+      { upsert: true }
+    );
     res.json(updatedValue);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update config' });
   }
 });
 
-// --- Auth Endpoints ---
-
+// Auth Endpoints
 app.post('/api/auth/login', async (req, res) => {
   const { role, identifier, password } = req.body;
-  
-  if (!identifier || !password) {
-    return res.status(400).json({ error: 'ID and Password are required.' });
-  }
-
-  // Force identifier to uppercase
-  const idUpper = identifier.trim().toUpperCase();
-  const passTrimmed = password.trim();
 
   try {
     let user = null;
     
+    // Check lock first (fast exit)
+    if (role !== 'ADMIN') {
+      const config = await Config.findOne({ key: 'system_settings' });
+      if (config?.value?.isLoginLocked) {
+        return res.status(403).json({ error: 'System is currently locked by Administrator.' });
+      }
+    }
+
     if (role === 'STUDENT') {
-      user = await Student.findOne({ rollNumber: idUpper, password: passTrimmed });
-    } else {
-      // For TEACHER/ADMIN portals, check the User collection
-      // The role in the portal is just a hint; we use the role stored in the DB
-      user = await User.findOne({ identifier: idUpper, password: passTrimmed });
+      user = await Student.findOne({ rollNumber: identifier.toUpperCase(), password });
+    } else if (role === 'TEACHER') {
+      user = await Teacher.findOne({ employeeId: identifier, password });
+    } else if (role === 'ADMIN') {
+       if (identifier === 'admin' && password === 'admin') {
+         user = { name: 'Administrator', role: 'ADMIN', identifier: 'admin' };
+       }
     }
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials. Check your ID and password.' });
-    }
-
-    const finalRole = user.role || 'STUDENT';
-
-    // System Lock Check (Admins are always exempt)
-    if (finalRole !== 'ADMIN') {
-      const config = await Config.findOne({ key: 'system_settings' });
-      if (config?.value?.isLoginLocked) {
-        return res.status(403).json({ error: 'System is currently locked. Contact Administrator.' });
-      }
+      return res.status(401).json({ error: 'Invalid credentials. Please check your ID and password.' });
     }
 
     res.json({
       success: true,
       name: user.name,
-      role: finalRole,
-      identifier: idUpper
+      role: role,
+      identifier: identifier.toUpperCase()
     });
+
   } catch (err) {
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error during login' });
   }
 });
 
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { identifier, name, password, role, department, section, phone } = req.body;
+    
     if (!identifier || !name || !password || !role) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    const idUpper = identifier.trim().toUpperCase();
-    const passTrimmed = password.trim();
-
-    // Prevent public registration as ADMIN
-    if (role === 'ADMIN') {
-      return res.status(403).json({ error: 'Admin accounts cannot be created via signup.' });
+      return res.status(400).json({ error: 'Missing required fields.' });
     }
 
     if (role === 'STUDENT') {
-      const existing = await Student.findOne({ rollNumber: idUpper });
-      if (existing) return res.status(400).json({ error: 'Student roll number already exists' });
+      const existing = await Student.findOne({ rollNumber: identifier.toUpperCase() });
+      if (existing) return res.status(400).json({ error: 'Student already registered.' });
       
       const student = new Student({
-        rollNumber: idUpper,
-        name: name.trim(),
-        password: passTrimmed,
+        rollNumber: identifier.toUpperCase(),
+        name,
+        password,
         department,
         section,
         phone
       });
       await student.save();
     } else if (role === 'TEACHER') {
-      const existing = await User.findOne({ identifier: idUpper });
-      if (existing) return res.status(400).json({ error: 'Faculty ID already exists' });
+      const existing = await Teacher.findOne({ employeeId: identifier });
+      if (existing) return res.status(400).json({ error: 'Teacher already registered.' });
       
-      const user = new User({
-        identifier: idUpper,
-        name: name.trim(),
-        password: passTrimmed,
-        role: 'TEACHER',
+      const teacher = new Teacher({
+        employeeId: identifier,
+        name,
+        password,
         department
       });
-      await user.save();
+      await teacher.save();
     }
 
     res.status(201).json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: 'Registration failed' });
+    console.error('❌ Registration error:', err);
+    res.status(400).json({ error: 'Registration failed.' });
   }
 });
 
-// --- User Management (Admin Dashboard helpers) ---
+// Bulk Import
+app.post('/api/students/bulk', async (req, res) => {
+  try {
+    const studentsData = req.body.students;
+    if (!Array.isArray(studentsData)) return res.status(400).json({ error: 'Invalid data format' });
 
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    for (const data of studentsData) {
+      const normalizedRoll = data.rollNumber.toUpperCase();
+      const existing = await Student.findOne({ rollNumber: normalizedRoll });
+      
+      if (!existing) {
+        const student = new Student({
+          rollNumber: normalizedRoll,
+          name: data.name,
+          password: data.password,
+          department: data.department,
+          section: data.section,
+          phone: data.phone
+        });
+        await student.save();
+        addedCount++;
+      } else {
+        skippedCount++;
+      }
+    }
+
+    res.json({ success: true, added: addedCount, skipped: skippedCount });
+  } catch (err) {
+    console.error('Bulk import error:', err);
+    res.status(500).json({ error: 'Failed to process bulk import' });
+  }
+});
+
+// Student Endpoints
 app.get('/api/students', async (req, res) => {
   const students = await Student.find();
   res.json(students);
 });
 
-app.get('/api/teachers', async (req, res) => {
-  // Only return users with role TEACHER (Admins managed separately or filtered)
-  const teachers = await User.find({ role: 'TEACHER' });
-  res.json(teachers);
+app.get('/api/students/:id', async (req, res) => {
+  const student = await Student.findOne({ rollNumber: req.params.id.toUpperCase() });
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(student);
+});
+
+app.post('/api/students/:id/reset-device', async (req, res) => {
+  await Student.updateOne({ rollNumber: req.params.id.toUpperCase() }, { $unset: { deviceId: 1 } });
+  res.json({ success: true });
 });
 
 app.delete('/api/students/:id', async (req, res) => {
@@ -173,13 +203,24 @@ app.delete('/api/students/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// Teacher Endpoints
+app.get('/api/teachers', async (req, res) => {
+  const teachers = await Teacher.find();
+  res.json(teachers);
+});
+
+app.get('/api/teachers/:id', async (req, res) => {
+  const teacher = await Teacher.findOne({ employeeId: req.params.id });
+  if (!teacher) return res.status(404).json({ error: 'Teacher not found' });
+  res.json(teacher);
+});
+
 app.delete('/api/teachers/:id', async (req, res) => {
-  await User.deleteOne({ identifier: req.params.id.toUpperCase(), role: 'TEACHER' });
+  await Teacher.deleteOne({ employeeId: req.params.id });
   res.json({ success: true });
 });
 
-// --- Sessions & Attendance ---
-// (Existing session logic remains compatible as it uses idUpper)
+// Session Endpoints
 app.get('/api/sessions', async (req, res) => {
   const sessions = await Session.find().sort({ createdAt: -1 });
   res.json(sessions);
@@ -196,27 +237,34 @@ app.put('/api/sessions/:id', async (req, res) => {
   res.json(session);
 });
 
+// Attendance Marking Logic
 app.post('/api/sessions/:id/mark', async (req, res) => {
   const { id } = req.params;
   const { rollNumber, deviceId, name, department, section } = req.body;
+
   try {
     const session = await Session.findOne({ id, isActive: true });
     if (!session) return res.status(404).json({ error: 'Session not active' });
-    const idUpper = rollNumber.trim().toUpperCase();
-    
-    if (session.attendance.some(r => r.rollNumber === idUpper)) {
-      return res.status(400).json({ error: 'Already marked' });
+
+    const normalizedRoll = rollNumber.toUpperCase();
+
+    if (session.attendance.some(r => r.rollNumber === normalizedRoll)) {
+      return res.status(400).json({ error: 'Attendance already marked' });
     }
 
-    const student = await Student.findOne({ rollNumber: idUpper });
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-    
+    const student = await Student.findOne({ rollNumber: normalizedRoll });
+    if (!student) {
+      return res.status(404).json({ error: 'Student record not found in database.' });
+    }
+
     if (student.deviceId && student.deviceId !== deviceId) {
-      return res.status(403).json({ error: 'Identity locked to another device.' });
+      return res.status(403).json({ error: 'Device mismatch. Identity locked to another device.' });
     }
 
-    const other = await Student.findOne({ deviceId, rollNumber: { $ne: idUpper } });
-    if (other) return res.status(403).json({ error: `Device used by ${other.name}` });
+    const otherStudent = await Student.findOne({ deviceId, rollNumber: { $ne: normalizedRoll } });
+    if (otherStudent) {
+      return res.status(403).json({ error: `Device proxy detected. Already used by ${otherStudent.name}` });
+    }
 
     if (!student.deviceId) {
       student.deviceId = deviceId;
@@ -224,19 +272,22 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
     }
 
     session.attendance.push({ 
-      rollNumber: idUpper, 
-      name: name.trim(), 
-      department: department || student.department, 
-      section: section || student.section, 
+      rollNumber: normalizedRoll, 
+      name, 
+      department: department || student.department,
+      section: section || student.section,
       deviceId, 
       timestamp: new Date() 
     });
     await session.save();
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to mark' });
+    console.error('Mark Attendance Error:', err);
+    res.status(500).json({ error: 'Failed to mark attendance' });
   }
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`🚀 Server Running on Port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server Running on Port ${PORT}`);
+});

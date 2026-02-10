@@ -18,6 +18,25 @@ const connectDB = async () => {
     if (mongoose.connection.readyState >= 1) return;
     await mongoose.connect(uri);
     console.log('✅ MongoDB Connected');
+
+    // Maintenance: Drop obsolete index causing E11000 errors on 'employeeId'
+    try {
+      const collections = await mongoose.connection.db.listCollections({ name: 'teachers' }).toArray();
+      if (collections.length > 0) {
+        const teacherCollection = mongoose.connection.db.collection('teachers');
+        const indexes = await teacherCollection.indexes();
+        const hasBadIndex = indexes.some(idx => idx.name === 'employeeId_1');
+        
+        if (hasBadIndex) {
+          console.log('🧹 Removing obsolete index: employeeId_1');
+          await teacherCollection.dropIndex('employeeId_1');
+          console.log('✨ Obsolete index removed successfully.');
+        }
+      }
+    } catch (indexErr) {
+      console.warn('⚠️ Note: Could not check/drop obsolete index (might not exist or insufficient permissions):', indexErr.message);
+    }
+
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
   }
@@ -71,7 +90,7 @@ app.post('/api/auth/login', async (req, res) => {
     let finalRole = role;
 
     if (role === 'STUDENT') {
-      if (isLocked) return res.status(403).json({ error: 'System is currently locked.' });
+      if (isLocked) return res.status(403).json({ error: 'System is currently locked by administration.' });
       user = await Student.findOne({ rollNumber: idUpper, password: passTrimmed });
       finalRole = 'STUDENT';
     } else {
@@ -80,13 +99,13 @@ app.post('/api/auth/login', async (req, res) => {
         user = adminUser;
         finalRole = 'ADMIN';
       } else {
-        if (isLocked) return res.status(403).json({ error: 'System is currently locked.' });
+        if (isLocked) return res.status(403).json({ error: 'System is currently locked by administration.' });
         user = await Teacher.findOne({ identifier: idUpper, password: passTrimmed });
         finalRole = 'TEACHER';
       }
     }
 
-    if (!user) return res.status(401).json({ error: 'Invalid credentials. Please verify your ID and password.' });
+    if (!user) return res.status(401).json({ error: 'Invalid ID or Password.' });
 
     res.json({
       success: true,
@@ -96,7 +115,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({ error: 'Authentication service error.' });
   }
 });
 
@@ -104,19 +123,19 @@ app.post('/api/auth/register', async (req, res) => {
   const { identifier, name, password, role, department, section, phone } = req.body;
   
   if (!identifier || !name || !password || !role) {
-    return res.status(400).json({ error: 'All fields are required.' });
+    return res.status(400).json({ error: 'All fields are mandatory for registration.' });
   }
 
   const idUpper = identifier.trim().toUpperCase();
   
   try {
     if (role === 'ADMIN') {
-      return res.status(403).json({ error: 'Admin signup is restricted.' });
+      return res.status(403).json({ error: 'Administrative registration is restricted.' });
     }
 
     if (role === 'STUDENT') {
       const existing = await Student.findOne({ rollNumber: idUpper });
-      if (existing) return res.status(400).json({ error: 'This Roll Number is already registered.' });
+      if (existing) return res.status(400).json({ error: 'This Roll Number is already in use.' });
       
       const newStudent = new Student({ 
         rollNumber: idUpper, 
@@ -128,12 +147,11 @@ app.post('/api/auth/register', async (req, res) => {
       });
       await newStudent.save();
     } else if (role === 'TEACHER') {
-      // Check both collections since they share the Faculty/Admin portal
       const teacherExists = await Teacher.findOne({ identifier: idUpper });
       const adminExists = await Admin.findOne({ identifier: idUpper });
       
       if (teacherExists || adminExists) {
-        return res.status(400).json({ error: 'This Faculty ID is already registered in the system.' });
+        return res.status(400).json({ error: 'This Faculty ID is already registered.' });
       }
       
       const newTeacher = new Teacher({ 
@@ -145,15 +163,19 @@ app.post('/api/auth/register', async (req, res) => {
       await newTeacher.save();
     }
 
-    res.status(201).json({ success: true, message: 'Registration successful.' });
+    res.status(201).json({ success: true, message: 'Account created successfully!' });
   } catch (err) {
-    console.error('Registration Error:', err);
-    // 11000 is the MongoDB duplicate key error code
-    const isDuplicate = err.code === 11000;
-    const message = isDuplicate 
-      ? `The ID "${idUpper}" is already in use.` 
-      : (err.message || 'Registration failed. Please try again.');
-    res.status(400).json({ error: message });
+    console.error('Registration Error Details:', err);
+    
+    // Handle duplicate key errors specifically
+    if (err.code === 11000) {
+      const key = Object.keys(err.keyValue || {})[0];
+      return res.status(400).json({ 
+        error: `Database conflict: The ${key === 'identifier' ? 'Faculty ID' : 'Roll Number'} is already registered.` 
+      });
+    }
+    
+    res.status(400).json({ error: err.message || 'Registration failed due to a system error.' });
   }
 });
 
@@ -180,7 +202,7 @@ app.post('/api/students/bulk', async (req, res) => {
       } else skipped++;
     }
     res.json({ success: true, added, skipped });
-  } catch (err) { res.status(500).json({ error: 'Bulk import failed.' }); }
+  } catch (err) { res.status(500).json({ error: 'Bulk processing failed.' }); }
 });
 
 app.get('/api/teachers', async (req, res) => res.json(await Teacher.find().sort({ identifier: 1 })));
@@ -200,19 +222,19 @@ app.post('/api/sessions/:id/mark', async (req, res) => {
   const { rollNumber, deviceId, name, department, section } = req.body;
   try {
     const session = await Session.findOne({ id, isActive: true });
-    if (!session) return res.status(404).json({ error: 'Session is no longer active.' });
+    if (!session) return res.status(404).json({ error: 'This session is no longer accepting check-ins.' });
     const roll = rollNumber.trim().toUpperCase();
-    if (session.attendance.some(r => r.rollNumber === roll)) return res.status(400).json({ error: 'Attendance already recorded.' });
+    if (session.attendance.some(r => r.rollNumber === roll)) return res.status(400).json({ error: 'Your attendance is already recorded.' });
     const student = await Student.findOne({ rollNumber: roll });
-    if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (student.deviceId && student.deviceId !== deviceId) return res.status(403).json({ error: 'Identity locked to another device.' });
-    if (await Student.findOne({ deviceId, rollNumber: { $ne: roll } })) return res.status(403).json({ error: 'Device mismatch alert.' });
+    if (!student) return res.status(404).json({ error: 'Student record not found.' });
+    if (student.deviceId && student.deviceId !== deviceId) return res.status(403).json({ error: 'ID is locked to another physical device.' });
+    if (await Student.findOne({ deviceId, rollNumber: { $ne: roll } })) return res.status(403).json({ error: 'This device is already linked to a different student.' });
     if (!student.deviceId) { student.deviceId = deviceId; await student.save(); }
     session.attendance.push({ rollNumber: roll, name, department, section, deviceId, timestamp: new Date() });
     await session.save();
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to record attendance.' }); }
+  } catch (err) { res.status(500).json({ error: 'Failed to record check-in.' }); }
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`🚀 API active on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 EduTrack API listening on port ${PORT}`));
